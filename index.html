@@ -1425,6 +1425,16 @@ function updateNewLoanSchedule(){
  if(payment&&principal&&Number(principal.value)>0){const total=Number(principal.value)*1.2;payment.placeholder=weekly?'4 cuotas de '+money(total/4):'Monto diario';}
 }
 function calcNew(){newTotal.value=money(Number(newPrincipal.value||0)*1.2);updateNewLoanSchedule()}
+async function verifyPendingLoanBeforeDiscard(pending){
+ if(!pending?.id){alert('No hay referencia pendiente válida.');return}
+ const {data,error}=await sb.from('loans_disbursement_requests').select('loan_id').eq('request_id',pending.id).maybeSingle();
+ if(error){alert('No se pudo verificar la operación anterior. No se borró la referencia por seguridad: '+error.message);return}
+ if(data?.loan_id){alert('La operación anterior SÍ se registró. Crédito: '+data.loan_id+'. No se borró la referencia; revise el listado de préstamos.');return}
+ if(!confirm('No se encontró un préstamo confirmado para la operación anterior. Si el envío todavía está en curso, espere antes de descartarlo. ¿Descartar la referencia anterior y preparar un nuevo intento?'))return;
+ try{sessionStorage.removeItem('cartera24_v29_pending_loan')}catch(e){alert('No se pudo limpiar la referencia: '+e.message);return}
+ pendingLoanRequest=null;
+ alert('Referencia anterior descartada. Revise los datos y pulse Crear préstamo nuevamente una sola vez.');
+}
 async function saveLoan(){
  if(window._loanSaveBusy || window._loanSavePreflightBusy)return;
  window._loanSavePreflightBusy=true;
@@ -1465,7 +1475,7 @@ async function saveLoan(){
  const storageKey='cartera24_v29_pending_loan';
  if(!pendingLoanRequest)pendingLoanRequest=readPendingLoan();
  if(pendingLoanRequest && pendingLoanRequest.fingerprint!==fingerprint){
-  alert('Existe un préstamo pendiente de confirmación con otros datos. No cree otro crédito hasta verificar el anterior.');return;
+  await verifyPendingLoanBeforeDiscard(pendingLoanRequest);return;
  }
  if(!pendingLoanRequest){pendingLoanRequest={id:crypto.randomUUID(),fingerprint,clientId:clientIdSelected||null};
   try{sessionStorage.setItem(storageKey,JSON.stringify(pendingLoanRequest))}catch(e){pendingLoanRequest=null;alert('No se pudo guardar la referencia de seguridad. No se envió el préstamo.');return}
