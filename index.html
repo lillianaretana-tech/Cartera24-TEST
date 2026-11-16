@@ -137,7 +137,9 @@ footer{text-align:center;color:#9b8d83;font-size:11px;padding:20px 8px}
   <button class="secondary big" onclick="openPhysicalCardImport()">↩️ Saldo inicial / migrar deuda anterior</button>
  </div>
  <div class="section-title"><h2>Créditos activos</h2><span class="sub" id="loanCount"></span></div>
+ <input id="loanSearch" placeholder="Buscar crédito por cliente, número, teléfono o cédula…" oninput="renderLoans()" autocomplete="off" style="margin-bottom:12px">
  <div id="loanList"></div>
+ <div class="owner-only" style="margin-top:24px"><button class="secondary big" onclick="exportAllLoanStatementsExcel()">⬇ Excel de toda la cartera</button></div>
 </section>
 
 <section id="clients" class="view">
@@ -436,8 +438,8 @@ function isSundayISO(iso){if(!iso)return false;const [y,m,d]=iso.slice(0,10).spl
 function creditTodayISO(){const t=todayISO();if(!isSundayISO(t))return t;const [y,m,d]=t.split('-').map(Number),x=new Date(Date.UTC(y,m-1,d-1));return x.toISOString().slice(0,10)}
 function addEffectiveDays(start,days){const [y,m,d]=String(start).slice(0,10).split('-').map(Number),x=new Date(Date.UTC(y,m-1,d));let left=Number(days||0);while(left>0){x.setUTCDate(x.getUTCDate()+1);if(x.getUTCDay()!==0)left--}return x.toISOString().slice(0,10)}
 function loanTermDays(l){return Number(l?.effective_term_days||l?.term_days||24)}
-function termLabel(l){const days=loanTermDays(l);return l?.credit_term_code?'Plazo '+days+' días efectivos (sin domingos)':'Plazo histórico '+days+' días'}
-function scheduledTodayForLoan(l){if(isSundayISO(todayISO()))return 0;return Math.min(Number(l.expected_payment||0),balanceForLoan(l.id)+paidTodayForLoan(l.id))}
+function termLabel(l){const days=loanTermDays(l);return String(l.collection_frequency||'').startsWith('weekly:')?'4 pagos semanales · '+['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][Number(l.collection_frequency.split(':')[1])] :l?.credit_term_code?'Plazo '+days+' días efectivos (sin domingos)':'Plazo histórico '+days+' días'}
+function scheduledTodayForLoan(l){const freq=String(l.collection_frequency||'daily');if(freq.startsWith('weekly:')){const weekday=Number(freq.split(':')[1]);if(![7,14,21,28].map(d=>addCalendarDaysISO(String(l.start_date).slice(0,10),d)).includes(todayISO()))return 0;}if(isSundayISO(todayISO()))return 0;return Math.min(Number(l.expected_payment||0),balanceForLoan(l.id)+paidTodayForLoan(l.id))}
 function pendingTodayForLoan(l){return Math.max(0,scheduledTodayForLoan(l)-paidTodayForLoan(l.id))}
 function pendingTodayLoans(){return todayLoans().filter(l=>pendingTodayForLoan(l)>0)}
 function localISOOffset(days){const [y,m,d]=todayISO().split('-').map(Number);return new Date(Date.UTC(y,m-1,d+days)).toISOString().slice(0,10)}
@@ -488,7 +490,8 @@ function isCycleDue(c){return c&&creditTodayISO()>=String(c.due_date).slice(0,10
 function isCycleOverdue(c){return c&&creditTodayISO()>String(c.due_date).slice(0,10)}
 function loanCycleLabel(l){const c=activeCycleForLoan(l.id);return c?`Ciclo ${c.cycle_number} · ${termLabel(l)} · vence ${fmtDate(c.due_date)}`:'Sin ciclo activo'}
 function renderLoans(){
- const active=loans.filter(l=>['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0);
+ const q=(document.getElementById('loanSearch')?.value||'').trim().toLocaleLowerCase();
+ const active=loans.filter(l=>['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0).filter(l=>{const c=clientFor(l.client_id);return !q||[c.full_name,c.first_name,c.last_name,c.nickname,c.client_number,c.phone,c.identification,l.id].some(v=>String(v||'').toLocaleLowerCase().includes(q))});
  loanList.innerHTML=active.map(l=>{
     const c=clientFor(l.client_id),bal=balanceForLoan(l.id),cy=activeCycleForLoan(l.id),due=cy&&isCycleOverdue(cy)&&cycleRemaining(cy)>0;
    return `<div class="card">
@@ -506,8 +509,8 @@ function renderClients(){
  let q=(document.getElementById('search')?.value||'').trim().toLowerCase();
  let list=clients.filter(c=>loans.some(l=>l.client_id===c.id&&['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0)).filter(c=>[c.client_number,c.first_name,c.last_name,c.nickname,c.phone,c.full_name].some(v=>String(v||'').toLowerCase().includes(q)));
  clientList.innerHTML=list.map(c=>{
-   let ls=loans.filter(l=>l.client_id===c.id),bal=ls.reduce((s,l)=>s+balanceForLoan(l.id),0);
-   const nm=clientDisplayName(c); return `<div class="card person"><div class="avatar">${(c.first_name||c.full_name||'?')[0]}</div><div class="info"><b>#${c.client_number||'—'} · ${nm}</b><small>${c.nickname&&nm!==c.nickname?`Apodo: ${c.nickname} · `:''}${c.phone?`${c.phone} · `:''}Saldo ${money(bal)}</small></div><button class="secondary" onclick="openClientFile('${c.id}')">Expediente</button></div>`;
+   let ls=loans.filter(l=>l.client_id===c.id&&['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0),bal=ls.reduce((sum,l)=>sum+balanceForLoan(l.id),0);
+   const nm=clientDisplayName(c); return `<div class="card person"><div class="avatar">${(c.first_name||c.full_name||'?')[0]}</div><div class="info"><b>#${c.client_number||'—'} · ${nm}</b><small>${c.nickname&&nm!==c.nickname?`Apodo: ${c.nickname} · `:''}${c.phone?`${c.phone} · `:''}${ls.length===1?'Saldo '+money(bal):ls.length+' créditos pendientes · Total '+money(bal)+' · '+ls.map(l=>fmtDate(l.start_date)+': '+money(balanceForLoan(l.id))).join(' / ')}</small></div><button class="secondary" onclick="openClientFile('${c.id}')">Expediente</button></div>`;
  }).join('')||'<div class="empty">No hay clientes con crédito vigente.</div>';
 }
 
@@ -642,7 +645,7 @@ function clientCollectionHistory(ls,ps){
     const due=String(l.due_date||'').slice(0,10);
     let effectiveDays=0;for(let dd=addCalendarDaysISO(first,1);dd<=day;dd=addCalendarDaysISO(dd,1)){if(!isSundayISO(dd))effectiveDays++;}
     const frequency=l.collection_frequency||'daily';
-    const scheduled=frequency==='daily'||(frequency==='weekly'&&effectiveDays>0&&effectiveDays%7===0);
+    const scheduled=frequency==='daily'||(frequency.startsWith('weekly:')&&[7,14,21,28].map(d=>addCalendarDaysISO(first,d)).includes(day))||(frequency==='weekly'&&effectiveDays>0&&effectiveDays%7===0);
     if(paid>0){entries.push({day,paid,loan:l});}
     else if(scheduled&&day<today&&(!due||day<=due)&&prior<amountDue-0.001){entries.push({day,missed:true,loan:l});}
    }
@@ -668,12 +671,9 @@ function openClientFile(id){
   <div class="stat"><small>Saldo pendiente</small><b>${money(bal)}</b></div>
   <div class="stat"><small>Créditos</small><b>${ls.length}</b></div>
  </div>
- <h4 style="margin-bottom:6px">Créditos</h4>
- ${ls.length?ls.map(l=>`<div class="card"><div class="section-title" style="margin:0"><div><b>${fmtDate(l.start_date)}</b><div class="sub">${loanCycleLabel(l)} · Saldo ${money(balanceForLoan(l.id))}</div></div><button class="secondary" onclick="openLoanHistory('${l.id}')">Ver historial</button></div></div>`).join(''):'<div class="empty">Este cliente todavía no tiene créditos.</div>'}
- <h4 style="margin-bottom:6px">Historial de cobros</h4>
- <div class="sub" style="margin-bottom:8px">Los días sin pago se identifican automáticamente según el calendario del crédito. No significan que Alex haya visitado al cliente. No se incluyen domingos.</div>
- ${clientCollectionHistory(ls,ps).map(e=>`<div class="receipt-line"><span>${weekdayDate(e.day)}${ls.length>1?` <small class="sub">· Crédito ${fmtDate(e.loan.start_date)}</small>`:''}</span><b style="${e.missed?'color:#ad432d':''}">${e.missed?'No registró pago':money(e.paid)}</b></div>`).join('')||'<div class="sub">Sin movimientos ni fechas pendientes recientes.</div>'}
- ${ls.some(l=>l.collection_frequency==='custom')?'<div class="sub">Los cobros personalizados solo muestran pagos registrados; requieren un calendario definido para señalar ausencias.</div>':''}
+ <h4 style="margin-bottom:6px">Créditos activos</h4>
+ ${ls.filter(l=>['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0).map(l=>`<div class="card" style="margin-top:8px"><div class="section-title" style="margin:0"><div><b>Crédito #${loanShortCode(l)} · ${fmtDate(l.start_date)}</b><div class="sub">${loanCycleLabel(l)} · Saldo ${money(balanceForLoan(l.id))}</div></div></div><div class="actions"><button class="secondary" onclick="openLoanHistory('${l.id}')">Ver historial / estado</button></div></div>`).join('')||'<div class="empty">No hay créditos activos.</div>'}
+ ${ls.some(l=>!['active','refinanced'].includes(l.status)||balanceForLoan(l.id)<=0)?`<details style="margin-top:10px"><summary class="sub" style="cursor:pointer">Consultar créditos pagados / anteriores</summary>${ls.filter(l=>!['active','refinanced'].includes(l.status)||balanceForLoan(l.id)<=0).map(l=>`<div class="card" style="margin-top:8px"><b>Crédito #${loanShortCode(l)} · ${fmtDate(l.start_date)}</b><div class="sub">Pagado / anterior · Saldo ${money(balanceForLoan(l.id))}</div><button class="secondary" onclick="openLoanHistory('${l.id}')">Ver historial</button></div>`).join('')}</details>`:''}
  <div class="actions" style="margin-top:14px">${['owner','admin'].includes(role)?`<button class="primary" onclick="editClient('${c.id}')">Editar cliente</button>`:''}<button class="secondary" onclick="closeModal()">Cerrar</button></div>`;
  modal.classList.add('show');
 }
@@ -825,6 +825,27 @@ function renderReport(){
     <div class="stat"><small>Refinanciados del período</small><b>${r.refinancedInPeriod}</b></div>
    </div>
  </div>`;
+}
+function exportAllLoanStatementsExcel(){
+ if(typeof XLSX==='undefined'){alert('No se pudo cargar el generador de Excel.');return}
+ const wb=XLSX.utils.book_new();
+ const headers=['Cliente N°','Cliente','ID crédito','Inicio','Vencimiento','Principal','Total a cobrar','Total pagado','Saldo','Estado registrado','Observación','Teléfono','Identificación'];
+ const rows=[headers],paymentsRows=[['Cliente N°','Cliente','ID crédito','Fecha de pago','Monto','Medio','ID pago']];
+ const counts={};
+ loans.forEach(l=>{if(balanceForLoan(l.id)>0)counts[l.client_id]=(counts[l.client_id]||0)+1});
+ loans.forEach(l=>{
+  const c=clientFor(l.client_id),ps=payments.filter(p=>p.loan_id===l.id),due=cycles.filter(x=>x.loan_id===l.id).reduce((n,x)=>n+Number(x.amount_due||0),0),paid=ps.reduce((n,p)=>n+Number(p.amount||0),0),balance=due-paid;
+  const note=balance<=0&&l.status==='active'?'Saldo cero, estado activo':balance>0&&counts[l.client_id]>1?'Varios créditos pendientes':'';
+  rows.push([c.client_number||'',clientDisplayName(c),l.id,l.start_date,l.due_date,Number(l.principal||0),due,paid,balance,l.status,note,c.phone||'',c.identification||'']);
+  ps.forEach(p=>paymentsRows.push([c.client_number||'',clientDisplayName(c),l.id,p.payment_date,Number(p.amount||0),p.payment_method||'',p.id]));
+ });
+ const alerts=[headers,...rows.slice(1).filter(r=>r[10])];
+ for(const [name,data] of [['Todos los créditos',rows],['Todos los pagos',paymentsRows],['Alertas',alerts]]){
+  const ws=XLSX.utils.aoa_to_sheet(data);ws['!cols']=data[0].map((_,i)=>({wch:i===2||i===6?39:23}));
+  ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:data.length-1,c:data[0].length-1}})};
+  XLSX.utils.book_append_sheet(wb,ws,name);
+ }
+ XLSX.writeFile(wb,'Cartera24_Cartera_Completa_'+todayISO()+'.xlsx');
 }
 function exportReportExcel(){
  if(typeof XLSX==='undefined'){alert('No se pudo cargar el generador de Excel. Comprueba la conexión a internet e inténtalo de nuevo.');return}
@@ -1028,15 +1049,34 @@ function renderAdmin(){if(!['owner','admin','technical_support','collector'].inc
 function renderCollectors(){if(!collectorList)return;collectorList.innerHTML=collectors.map(c=>{let n=loans.filter(l=>l.collector_id===c.user_id&&balanceForLoan(l.id)>0).length;return `<div class="collector-row"><div class="avatar">${(c.full_name||'?')[0]}</div><div class="info"><b>${c.full_name}</b><small>${c.active?'Activo':'Inactivo'} · ${n} crédito(s)</small></div><div class="collector-actions">${c.active?`<button class="secondary" onclick="openReassignCollector('${c.user_id}')">Cartera</button><button class="danger" onclick="deactivateCollector('${c.user_id}')">Desactivar</button>`:'<span class="pill">INACTIVO</span>'}</div></div>`}).join('')||'<div class="empty">Todavía no hay cobradores.</div>'}
 function freqLabel(v){return ({daily:'Diario',weekly:'Semanal',custom:'Personalizado'})[v]||v}
 
+function loanShortCode(l){return String(l.id||'').slice(0,8).toUpperCase()}
+function shareCreditStatement(id){
+ const l=loans.find(x=>x.id===id);if(!l)return;
+ const c=clientFor(l.client_id);
+ const ps=payments.filter(p=>p.loan_id===id);
+ const due=cycles.filter(x=>x.loan_id===id).reduce((n,x)=>n+Number(x.amount_due||0),0);
+ const paid=ps.reduce((n,p)=>n+Number(p.amount||0),0);
+ const entries=clientCollectionHistory([l],ps);
+ const lines=['ESTADO DE CUENTA - CARTERA 24','Cliente: '+clientDisplayName(c),'Crédito #'+loanShortCode(l),'Inicio: '+fmtDate(l.start_date),'Vencimiento: '+fmtDate((activeCycleForLoan(id)||cycles.filter(x=>x.loan_id===id).sort((a,b)=>Number(b.cycle_number)-Number(a.cycle_number))[0])?.due_date||l.due_date),'Monto prestado: '+money(l.principal),'Total del crédito: '+money(due),'Total abonado: '+money(paid),'Saldo pendiente: '+money(Math.max(0,due-paid)),'','HISTORIAL DE COBROS',...entries.map(e=>weekdayDate(e.day)+' - '+(e.missed?'No registró pago':money(e.paid)))];
+ const message=lines.join(String.fromCharCode(10));
+ const escapeHtml=v=>String(v).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+ sheet.innerHTML='<h3>Revisar estado de cuenta</h3><div class="sub">Verifique los datos antes de abrir WhatsApp. No se enviará nada sin su confirmación.</div><div class="card" style="margin-top:12px"><pre style="font:14px/1.65 system-ui,Arial;white-space:pre-wrap;overflow-wrap:anywhere;margin:0">'+lines.map(line=>line.includes('No registró pago')?'<span style="color:#b42318;font-weight:700">'+escapeHtml(line)+'</span>':escapeHtml(line)).join(String.fromCharCode(10))+'</pre></div><div class="actions"><button class="primary" id="confirmStatementShare">Confirmar y abrir WhatsApp</button><button class="secondary" onclick="openLoanHistory(\''+id+'\')">Volver</button></div>';
+ const btn=document.getElementById('confirmStatementShare');
+ btn.onclick=()=>{const url='https://wa.me/?text='+encodeURIComponent(message);const w=window.open(url,'_blank','noopener,noreferrer');if(!w)window.location.href=url;};
+ modal.classList.add('show');
+}
 function openLoanHistory(id){
  const l=loans.find(x=>x.id===id),c=clientFor(l.client_id),list=cycles.filter(x=>x.loan_id===id).sort((a,b)=>Number(a.cycle_number)-Number(b.cycle_number));
  const ps=payments.filter(p=>p.loan_id===id).sort((a,b)=>String(b.payment_date).localeCompare(String(a.payment_date)));
  sheet.innerHTML=`<h3>${c.full_name}</h3><div class="sub">Historial del crédito</div>
  ${l.source_type==='physical_card'?`<span class="pill" style="margin-top:8px">MIGRADO DE TARJETA</span>`:''}
   ${list.map(cy=>{const paid=cyclePaid(cy.id),rem=Math.max(0,Number(cy.amount_due)-paid);return `<div class="card" style="margin-top:10px"><b>Ciclo ${cy.cycle_number}</b><div class="sub">${termLabel(l)} · ${fmtDate(cy.start_date)} → ${fmtDate(cy.due_date)}</div><div style="margin-top:6px">Base: <b>${money(cy.opening_principal)}</b> · Interés: <b>${Number(cy.interest_rate)}%</b></div><div>Total ciclo: <b>${money(cy.amount_due)}</b> · Pagado: <b>${money(paid)}</b> · Saldo: <b>${money(rem)}</b></div><div class="sub">Estado: ${cy.status==='active'?'Activo':cy.status==='refinanced'?'Refinanciado':'Pagado'}</div></div>`}).join('')}
- <h4 style="margin-bottom:6px">Abonos</h4>
+ <h4 style="margin-bottom:6px">Historial de cobros de este crédito</h4>
+ <div class="sub">Crédito #${loanShortCode(l)} · Inicio ${fmtDate(l.start_date)}. Los días sin pago son estimaciones del calendario, no visitas confirmadas.</div>
+ ${clientCollectionHistory([l],ps).map(e=>`<div class="receipt-line"><span>${weekdayDate(e.day)}</span><b style="${e.missed?'color:#ad432d':''}">${e.missed?'No registró pago':money(e.paid)}</b></div>`).join('')||'<div class="sub">Sin movimientos recientes.</div>'}
+ <h4 style="margin-bottom:6px">Comprobantes de abonos</h4>
  ${ps.length?ps.map(p=>`<div class="card" style="margin-top:8px"><div class="receipt-line"><span>${fmtDate(p.payment_date)} · ${p.payment_method==='sinpe'?'SINPE':'Efectivo'}</span><b>${money(p.amount)}</b></div><button class="secondary big" style="margin-top:6px" onclick="openPaymentReceipt('${p.id}')">Ver / compartir recibo</button></div>`).join(''):'<div class="sub">Sin abonos registrados.</div>'}
- <div class="actions"><button class="secondary" onclick="closeModal()">Cerrar</button></div>`;
+ <div class="actions"><button class="primary" onclick="shareCreditStatement('${l.id}')">Enviar estado por WhatsApp</button><button class="secondary" onclick="closeModal()">Cerrar</button></div>`;
  modal.classList.add('show');
 }
 async function confirmRefinance(id){
@@ -1293,7 +1333,7 @@ async function savePhysicalCardImport(){
 }
 
 let pendingLoanRequest=null;
-function openNewLoan(){const sheet=document.getElementById('sheet');sheet.innerHTML=`<h3>Nuevo préstamo</h3><label>Cliente</label><select id="existingClient"><option value="">＋ Cliente nuevo</option>${clients.map(c=>`<option value="${c.id}">${clientDisplayName(c)}${c.nickname?` (${c.nickname})`:''}</option>`).join('')}</select><label>Nombre del cliente nuevo</label><input id="newName" placeholder="Nombre completo"><label>Identificación (opcional)</label><input id="newIdentification" placeholder="Cédula / identificación"><label>Teléfono (opcional)</label><input id="newPhone" placeholder="8888-8888"><label>Dirección / referencia (opcional)</label><textarea id="newAddress" rows="2" placeholder="Dirección o punto de referencia"></textarea><label>Notas del cliente (opcional)</label><textarea id="newClientNotes" rows="2" placeholder="Información útil"></textarea><label>Monto entregado</label><input id="newPrincipal" type="number" placeholder="100000" oninput="calcNew()"><div class="row"><div><label>Interés</label><input value="20%" disabled></div><div><label>Total a cobrar</label><input id="newTotal" disabled></div></div><label>Modalidad / plazo del crédito</label><select id="newTerm"><option value="weekly">Semanal · 7 días efectivos</option><option value="fortnightly">Quincenal · 15 días efectivos</option><option value="days_24" selected>24 días efectivos</option><option value="days_30">30 días efectivos</option></select><div class="role-note">Los domingos no consumen días del plazo ni adelantan el vencimiento.</div><label>Frecuencia de cobro</label><select id="newFreq"><option value="daily">Diario</option><option value="weekly">Semanal</option><option value="custom">Personalizado</option></select><label>Monto esperado por cobro</label><input id="newPayment" type="number" placeholder="5000"><label>Cobrador asignado (solo TEST)</label><select id="newCollector">${collectors.filter(c=>c.active).map(c=>`<option value="${c.user_id}">${c.full_name}</option>`).join('')}</select><div class="role-note">Modo de pruebas: elija un cobrador activo. En producción se debe validar y configurar la asignación definitiva a Alex antes de publicar.</div><div class="actions"><button class="secondary" onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLoan()">Crear préstamo</button></div>`;modal.classList.add('show');
+function openNewLoan(){const sheet=document.getElementById('sheet');sheet.innerHTML=`<h3>Nuevo préstamo</h3><label>Cliente</label><input id="existingClientSearch" placeholder="Buscar por nombre, número, apodo, cédula o teléfono" oninput="filterExistingLoanClients()" autocomplete="off"><select id="existingClient" onchange="updateExistingLoanClient()"><option value="">＋ Cliente nuevo</option>${clients.map(c=>`<option value="${c.id}">${clientDisplayName(c)}${c.nickname?` (${c.nickname})`:''}</option>`).join('')}</select><div id="existingLoanClientInfo" class="card" style="display:none;margin-top:10px"></div><div id="newLoanClientFields"><label>Nombre del cliente nuevo</label><input id="newName" placeholder="Nombre completo"><label>Identificación (opcional)</label><input id="newIdentification" placeholder="Cédula / identificación"><label>Teléfono (opcional)</label><input id="newPhone" placeholder="8888-8888"><label>Dirección / referencia (opcional)</label><textarea id="newAddress" rows="2" placeholder="Dirección o punto de referencia"></textarea><label>Notas del cliente (opcional)</label><textarea id="newClientNotes" rows="2" placeholder="Información útil"></textarea></div><label>Monto entregado</label><input id="newPrincipal" type="number" placeholder="100000" oninput="calcNew()"><div class="row"><div><label>Interés</label><input value="20%" disabled></div><div><label>Total a cobrar</label><input id="newTotal" disabled></div></div><label>Modalidad / plazo del crédito</label><select id="newTerm" onchange="updateNewLoanSchedule()"><option value="days_24" selected>24 días · pago diario (sin domingos)</option><option value="days_30">30 días · pago diario (sin domingos)</option><option value="weekly_30">30 días · 4 pagos semanales</option></select><div class="role-note">Los domingos no consumen días del plazo ni adelantan el vencimiento.</div><div id="weeklyDayBox" style="display:none" class="role-note">El primer pago será 7 días después del préstamo y los siguientes cada 7 días, siempre el mismo día de la semana.</div><label>Monto esperado por cobro</label><input id="newPayment" type="number" placeholder="5000"><label>Cobrador asignado (solo TEST)</label><select id="newCollector">${collectors.filter(c=>c.active).map(c=>`<option value="${c.user_id}">${c.full_name}</option>`).join('')}</select><div class="role-note">Modo de pruebas: elija un cobrador activo. En producción se debe validar y configurar la asignación definitiva a Alex antes de publicar.</div><div class="actions"><button class="secondary" onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveLoan()">Crear préstamo</button></div>`;modal.classList.add('show');
  // Recuperar el formulario original después de recargar la pestaña.
  // No borrar ni alterar el identificador de operación pendiente.
  const saved=readPendingLoan();
@@ -1304,12 +1344,14 @@ function openNewLoan(){const sheet=document.getElementById('sheet');sheet.innerH
    const values={existingClient:d.clientIdSelected||'',newName:d.name||'',
     newIdentification:d.identification||'',newPhone:d.phone||'',
     newAddress:d.address||'',newClientNotes:d.notes||'',
-    newPrincipal:d.p,newTerm:d.termCode,newFreq:d.frequency,newPayment:d.pay,newCollector:d.collectorId};
+    newPrincipal:d.p,newTerm:d.termCode,newPayment:d.pay,newCollector:d.collectorId};
    for(const [id,value] of Object.entries(values)){
     const el=document.getElementById(id);
     if(el && value!==undefined && value!==null)el.value=String(value);
    }
    calcNew();
+   updateNewLoanSchedule();
+   updateExistingLoanClient();
    const note=document.createElement('p');
    note.className='role-note';
    note.textContent='Operación pendiente recuperada. Verifique los datos y pulse Crear préstamo para confirmar o reintentar la misma solicitud. No cambie los datos antes de confirmar.';
@@ -1320,6 +1362,47 @@ function openNewLoan(){const sheet=document.getElementById('sheet');sheet.innerH
    sheet.prepend(note);
   }
  }
+ updateExistingLoanClient();
+}
+function filterExistingLoanClients(){
+ const input=document.getElementById('existingClientSearch'),sel=document.getElementById('existingClient');
+ if(!input||!sel)return;
+ const query=input.value.trim().toLocaleLowerCase();
+ const selected=sel.value;
+ const matches=clients.filter(c=>[c.client_number,c.full_name,c.first_name,c.last_name,c.nickname,c.identification,c.phone].some(v=>String(v||'').toLocaleLowerCase().includes(query)));
+ sel.innerHTML='<option value="">＋ Cliente nuevo</option>'+matches.map(c=>'<option value="'+c.id+'">'+String(c.client_number||'—')+' · '+clientDisplayName(c)+(c.nickname?' ('+c.nickname+')':'')+'</option>').join('');
+ if(matches.some(c=>c.id===selected))sel.value=selected;
+ else if(query && matches.length===1)sel.value=matches[0].id;
+ else sel.value='';
+ updateExistingLoanClient();
+}
+function updateExistingLoanClient(){
+ const sel=document.getElementById('existingClient'),fields=document.getElementById('newLoanClientFields'),info=document.getElementById('existingLoanClientInfo');
+ if(!sel||!fields||!info)return;
+ const c=clients.find(x=>x.id===sel.value);
+ fields.style.display=c?'none':'block';info.style.display=c?'block':'none';
+ if(!c){info.innerHTML='';return}
+ const esc=v=>String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+ const pending=loans.filter(l=>l.client_id===c.id&&['active','refinanced'].includes(l.status)&&balanceForLoan(l.id)>0);
+ info.innerHTML=(pending.length?'<div style="color:#b42318;font-weight:700">⚠️ Saldo anterior pendiente: '+money(pending.reduce((n,l)=>n+balanceForLoan(l.id),0))+' · No se permite crear otro crédito hasta regularizarlo.</div>':'')+'<b>Cliente #'+esc(c.client_number)+' · Datos personales editables</b><div class="sub">Conserva su número e historial.</div>'+
+ '<label>Nombre</label><input id="reuseName" value="'+esc(c.full_name)+'">'+
+ '<label>Identificación</label><input id="reuseId" value="'+esc(c.identification)+'">'+
+ '<label>Teléfono</label><input id="reusePhone" value="'+esc(c.phone)+'">'+
+ '<label>Dirección</label><textarea id="reuseAddress" rows="2">'+esc(c.address)+'</textarea>'+
+ '<label>Notas</label><textarea id="reuseNotes" rows="2">'+esc(c.notes)+'</textarea>'+
+ '<button class="secondary" id="reuseSave" onclick="saveExistingLoanClient()">Guardar datos personales</button><div class="sub" id="reuseStatus">Guarde los cambios antes de crear el préstamo.</div>';
+}
+async function saveExistingLoanClient(){
+ const id=document.getElementById('existingClient').value,c=clients.find(x=>x.id===id);if(!c)return;
+ if(readPendingLoan()){alert('Verifique primero el préstamo pendiente antes de editar los datos.');return}
+ const name=document.getElementById('reuseName').value.trim();
+ if(!name){alert('Indique el nombre del cliente.');return}
+ const payload={full_name:name,first_name:name,last_name:null,identification:document.getElementById('reuseId').value.trim()||null,phone:document.getElementById('reusePhone').value.trim()||null,address:document.getElementById('reuseAddress').value.trim()||null,notes:document.getElementById('reuseNotes').value.trim()||null};
+ const btn=document.getElementById('reuseSave');btn.disabled=true;
+ const {data,error}=await sb.from('loans_clients').update(payload).eq('id',id).select('id,full_name,first_name,last_name,identification,phone,address,notes').single();
+ btn.disabled=false;
+ if(error){alert('No se guardó: '+error.message);return}
+ Object.assign(c,data);document.getElementById('reuseStatus').textContent='✓ Datos actualizados. Puede crear el préstamo.';
 }
 function readPendingLoan(){
  try{
@@ -1330,24 +1413,50 @@ function readPendingLoan(){
   return obj;
  }catch(e){return null}
 }
-function calcNew(){newTotal.value=money(Number(newPrincipal.value||0)*1.2)}
+function weeklyDatesAfter(start,weekday){
+ const dates=[];let day=start;
+ for(let i=0;i<35&&dates.length<4;i++){day=addCalendarDaysISO(day,1);const [y,m,d]=day.split('-').map(Number);if(new Date(Date.UTC(y,m-1,d)).getUTCDay()===Number(weekday))dates.push(day)}
+ return dates;
+}
+function updateNewLoanSchedule(){
+ const weekly=document.getElementById('newTerm')?.value==='weekly_30';
+ const box=document.getElementById('weeklyDayBox');if(box)box.style.display=weekly?'block':'none';
+ const payment=document.getElementById('newPayment'),principal=document.getElementById('newPrincipal');
+ if(payment&&principal&&Number(principal.value)>0){const total=Number(principal.value)*1.2;payment.placeholder=weekly?'4 cuotas de '+money(total/4):'Monto diario';}
+}
+function calcNew(){newTotal.value=money(Number(newPrincipal.value||0)*1.2);updateNewLoanSchedule()}
 async function saveLoan(){
  if(window._loanSaveBusy || window._loanSavePreflightBusy)return;
  window._loanSavePreflightBusy=true;
  try{
  const p=Number(newPrincipal.value),pay=Number(newPayment.value),clientIdSelected=existingClient.value;
- const terms={weekly:7,fortnightly:15,days_24:24,days_30:30},termCode=newTerm.value,termDays=terms[termCode];
+ const terms={days_24:24,days_30:30,weekly_30:30},termCode=newTerm.value,termDays=terms[termCode];
+ const weeklyDay=termCode==='weekly_30'?new Date(Date.UTC(...todayISO().split('-').map((v,i)=>i===1?Number(v)-1:Number(v)))).getUTCDay():null;
+ const frequency=weeklyDay!==null?'weekly:'+weeklyDay:'daily';
  // Reintentar con las fechas originales aunque haya cambiado el día.
  const recovered=readPendingLoan();
  let recoveredDetails=null;
  if(recovered){try{recoveredDetails=JSON.parse(recovered.fingerprint)}catch(e){}}
- const startDate=recoveredDetails?.startDate||todayISO(),dueDate=addEffectiveDays(startDate,termDays);
+ const startDate=recoveredDetails?.startDate||todayISO(),dueDate=weeklyDay!==null?addCalendarDaysISO(startDate,28):addEffectiveDays(startDate,termDays);
  if(!Number.isFinite(p)||p<=0||!Number.isFinite(pay)||pay<=0||!termDays){alert('Complete monto, plazo y cobro esperado.');return}
  if(!collectors.some(c=>c.user_id===newCollector.value && c.active)){alert('Seleccione un cobrador activo de pruebas antes de crear el préstamo.');return}
  const existing=clients.find(c=>c.id===clientIdSelected);
+ if(existing){
+  const {data:priorLoans,error:priorError}=await sb.from('loans_loans').select('id,start_date,status').eq('client_id',existing.id);
+  if(priorError){alert('No se pudo verificar los saldos anteriores. No se creará el préstamo.');return}
+  const ids=(priorLoans||[]).map(x=>x.id);
+  let outstanding=[];
+  if(ids.length){
+   const {data:oldCycles,error:cycleError}=await sb.from('loans_cycles').select('loan_id,amount_due').in('loan_id',ids);
+   const {data:oldPayments,error:paymentError}=await sb.from('loans_payments').select('loan_id,amount').in('loan_id',ids);
+   if(cycleError||paymentError){alert('No se pudo verificar el historial financiero. Operación detenida.');return}
+   outstanding=(priorLoans||[]).filter(l=>['active','refinanced'].includes(l.status)).map(l=>({l,balance:(oldCycles||[]).filter(c=>c.loan_id===l.id).reduce((n,c)=>n+Number(c.amount_due||0),0)-(oldPayments||[]).filter(p=>p.loan_id===l.id).reduce((n,p)=>n+Number(p.amount||0),0)})).filter(x=>x.balance>0.001);
+  }
+  if(outstanding.length){alert('⚠️ CRÉDITO ANTERIOR PENDIENTE\\n\\n'+clientDisplayName(existing)+' tiene '+outstanding.length+' crédito(s) con saldo pendiente:\\n'+outstanding.map(x=>fmtDate(x.l.start_date)+' · '+money(x.balance)).join('\\n')+'\\n\\nDebe liquidar o regularizar el saldo anterior antes de crear un préstamo nuevo.');return}
+ }
  const mm=morosoMatch(existing?.full_name||newName.value,existing?.phone||newPhone.value);
  if(mm){alert('⚠️ CLIENTE MOROSO\n\n'+mm.full_name+' mantiene una deuda morosa de '+money(mm.opening_balance)+'.\n\nIker debe revisar y autorizar un acuerdo especial.');return}
- const details={p, pay,clientIdSelected,collectorId:newCollector.value,termCode,termDays,startDate,dueDate,frequency:newFreq.value,
+ const details={p, pay,clientIdSelected,collectorId:newCollector.value,termCode,termDays,startDate,dueDate,frequency,
   name:newName.value.trim(),identification:newIdentification.value.trim(),phone:newPhone.value.trim(),
   address:newAddress.value.trim(),notes:newClientNotes.value.trim()};
  const fingerprint=JSON.stringify(details);
