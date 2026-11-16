@@ -1470,7 +1470,6 @@ async function saveLoan(){
  if(!pendingLoanRequest){pendingLoanRequest={id:crypto.randomUUID(),fingerprint,clientId:clientIdSelected||null};
   try{sessionStorage.setItem(storageKey,JSON.stringify(pendingLoanRequest))}catch(e){pendingLoanRequest=null;alert('No se pudo guardar la referencia de seguridad. No se envió el préstamo.');return}
  }
- }finally{window._loanSavePreflightBusy=false;}
  window._loanSaveBusy=true;setLoading(true);
  try{
   let clientId=pendingLoanRequest.clientId;
@@ -1522,6 +1521,7 @@ async function saveLoan(){
   go('loans',document.querySelectorAll('.nav button')[1]);
  }catch(error){alert('No se pudo confirmar el préstamo y su desembolso. Puede reintentar SIN cambiar los datos; se conservará la misma referencia. Detalle: '+error.message)}
  finally{window._loanSaveBusy=false;setLoading(false)}
+ }finally{window._loanSavePreflightBusy=false;}
 }
 function openCapital(){sheet.innerHTML=`<h3>Inyectar capital</h3><p class="sub">Registra únicamente dinero nuevo que Iker aporta al negocio. Aumenta el saldo disponible para prestar, sin contarlo como cobro ni como ganancia. No sirve para corregir diferencias de caja.</p><input id="capitalType" type="hidden" value="additional"><label>Monto aportado (₡)</label><input id="capitalAmount" type="number" min="1" step="1" placeholder="Ej. 300000"><label>Fecha del aporte</label><input id="capitalDate" type="date" value="${todayISO()}"><label>Origen / motivo (recomendado)</label><input id="capitalNotes" placeholder="Ej. Aporte personal de emergencia"><div class="actions"><button class="secondary" onclick="closeModal()">Cancelar</button><button class="primary" onclick="saveCapital()">Confirmar aporte</button></div>`;modal.classList.add('show')}
 async function saveCapital(){const amount=Number(capitalAmount.value||0),type=capitalType.value,date=capitalDate.value||todayISO(),notes=capitalNotes.value.trim();if(!Number.isFinite(amount)||amount<=0||!Number.isInteger(amount)){alert('Indique un monto positivo en colones enteros.');return}if(date>todayISO()){alert('La fecha del aporte no puede ser futura.');return}if(!confirm('¿Confirmar aporte real de '+money(amount)+' al capital del negocio? Esto aumentará el disponible de caja.'))return;setLoading(true);const {error}=await sb.rpc('loans_register_capital',{p_amount:amount,p_type:type,p_date:date,p_notes:notes||null});setLoading(false);if(error){alert('No se pudo registrar el capital: '+error.message);return}closeModal();await loadAll();alert(type==='initial'?'Capital inicial registrado.':'Aporte de capital registrado.')}
